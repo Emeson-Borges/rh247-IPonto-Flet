@@ -24,11 +24,16 @@ def formatar_cpf(cpf):
         cpf = cpf[:11] + "-" + cpf[11:]
     return cpf[:14]
 
-def criar_tela_cadastrar_funcionario(page):
+def criar_tela_cadastrar_funcionario(page: ft.Page):
+    # -------------------------------------------------------------------------
     # Variáveis de estado
+    # -------------------------------------------------------------------------
     rosto_capturado = None
-    hash_gerado = None  # Será o "embedding" (hash da imagem)
+    hash_gerado = None  # "embedding" (hash da imagem recortada)
 
+    # -------------------------------------------------------------------------
+    # Funções principais: captura de rosto, geração de hash, salvar, etc.
+    # -------------------------------------------------------------------------
     def capturar_rosto():
         nonlocal rosto_capturado, hash_gerado
 
@@ -39,7 +44,7 @@ def criar_tela_cadastrar_funcionario(page):
 
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         start_time = time.time()
-        capture_duration = 10  # tempo máximo de captura (segundos)
+        capture_duration = 10  # 10 segundos para capturar
 
         while time.time() - start_time < capture_duration:
             ret, frame = cap.read()
@@ -51,21 +56,20 @@ def criar_tela_cadastrar_funcionario(page):
 
             if len(faces) > 0:
                 (x, y, w, h) = faces[0]
-                rosto_capturado = frame[y : y + h, x : x + w]
+                rosto_capturado = frame[y:y+h, x:x+w]
 
                 # Desenha elipse no rosto
                 center = (x + w // 2, y + h // 2)
                 axes = (w // 2 + 20, h // 2 + 30)
                 cv2.ellipse(frame, center, axes, 0, 0, 360, (0, 255, 0), 2)
 
-            # Mostra frame no Flet
+            # Atualiza feed no Flet
             _, buffer = cv2.imencode(".jpg", frame)
             camera_feed.src_base64 = base64.b64encode(buffer).decode("utf-8")
             page.update()
 
         cap.release()
 
-        # Se capturamos um rosto, gerar o hash
         if rosto_capturado is not None:
             hash_gerado = gerar_hash_facial(rosto_capturado)
         else:
@@ -75,23 +79,19 @@ def criar_tela_cadastrar_funcionario(page):
 
     def gerar_hash_facial(bgr_image):
         """
-        Gera um hash (pHash) da imagem recortada do rosto.
-        Retorna um array de 8 bytes ou algo semelhante.
-        Em OpenCV, precisamos instalar `opencv-contrib-python` para usar cv2.img_hash.
+        Gera um hash pHash para a imagem do rosto.
+        Necessita opencv-contrib-python para cv2.img_hash.
         """
-        if len(bgr_image.shape) == 3:
-            gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = bgr_image
+        gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
+        # Equaliza a iluminação para ajudar na consistência
+        gray = cv2.equalizeHist(gray)
 
-        hasher = cv2.img_hash.PHash_create()  # ou AverageHash_create(), etc.
-        hash_val = hasher.compute(gray)  # Retorna um np.array shape (1, 8), dtype=uint8
-        # Convertendo em hex para salvar no banco como string
+        hasher = cv2.img_hash.PHash_create()
+        hash_val = hasher.compute(gray)  # shape: (1, 8)
         hash_hex = hash_val.flatten().tobytes().hex()
         return hash_hex
 
     def verificar_campos():
-        # Habilita "Salvar" se todos campos e hash_gerado existirem
         salvar_btn.disabled = not (
             nome_input.value.strip()
             and validar_cpf_formatado(cpf_input.value.strip())
@@ -102,19 +102,18 @@ def criar_tela_cadastrar_funcionario(page):
         page.update()
 
     def salvar_funcionario():
-        if not nome_input.value or not cpf_input.value or not matricula_input.value or not entidade_input.value:
+        if not nome_input.value.strip() or not cpf_input.value.strip() or not matricula_input.value.strip() or not entidade_input.value.strip():
             emitir_alerta("Erro", "Preencha todos os campos.")
             return
+
         if not hash_gerado:
             emitir_alerta("Erro", "Nenhum rosto foi capturado.")
             return
 
-        # Remove mascara do CPF
         cpf_somente_numeros = re.sub(r"\D", "", cpf_input.value.strip())
 
-        # Salva imagem do rosto, etc.
         try:
-            # Salva a foto do rosto
+            # Salva rosto localmente
             pasta_prova_vida = "prova_vida"
             if not os.path.exists(pasta_prova_vida):
                 os.makedirs(pasta_prova_vida)
@@ -130,25 +129,32 @@ def criar_tela_cadastrar_funcionario(page):
             # Salva no banco
             with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
                 c = conn.cursor()
-                c.execute("""
+                c.execute(
+                    """
                     INSERT INTO funcionarios (
                         nome, matricula, entidade_id, cpf, embedding, foto_base64, foto_blob
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    nome_input.value.strip(),
-                    int(matricula_input.value.strip()),
-                    int(entidade_input.value.strip()),
-                    cpf_somente_numeros,
-                    hash_gerado,        # Aqui salvamos o "hash" (pHash) como string
-                    foto_base64,
-                    foto_bin
-                ))
+                    """,
+                    (
+                        nome_input.value.strip(),
+                        int(matricula_input.value.strip()),
+                        int(entidade_input.value.strip()),
+                        cpf_somente_numeros,
+                        hash_gerado,
+                        foto_base64,
+                        foto_bin,
+                    ),
+                )
                 conn.commit()
 
             emitir_alerta("Sucesso", "Funcionário cadastrado com sucesso!")
             limpar_campos()
         except Exception as e:
             emitir_alerta("Erro", f"Ocorreu um erro: {e}")
+
+    def cancelar_funcionario():
+        # Limpa os campos, sem salvar
+        limpar_campos()
 
     def emitir_alerta(titulo, mensagem):
         def fechar_dialog(_):
@@ -175,68 +181,125 @@ def criar_tela_cadastrar_funcionario(page):
         hash_gerado = None
         page.update()
 
-    # -------------- UI --------------
-    nome_input = ft.TextField(label="Nome", width=300, on_change=lambda _: verificar_campos())
-    cpf_input = ft.TextField(
-        label="CPF (000.000.000-00)",
-        width=300,
-        on_change=lambda _: (
-            setattr(cpf_input, "value", formatar_cpf(cpf_input.value)),
-            verificar_campos()
+    # -------------------------------------------------------------------------
+    # MENU LATERAL (HAMBURGER) --> Ao clicar, abre um Container sobreposto
+    # -------------------------------------------------------------------------
+
+    # Container do menu lateral: inicialmente invisível
+    menu_lateral = ft.Container(
+        width=220,
+        height=400,          # Aproximadamente metade da vertical
+        bgcolor="#F9F9F9",
+        padding=15,
+        opacity=0.0,         # inicia transparente
+        visible=False,       # inicia oculto
+        animate_opacity=300, # animação de opacidade
+        content=ft.Column(
+            spacing=20,
+            controls=[
+                ft.Text("Menu Lateral", size=18, weight="bold"),
+                ft.ElevatedButton(
+                    text="Importar Funcionários",
+                    on_click=lambda _: page.go("/sincronizar_funcionarios"),
+                    style=ft.ButtonStyle(
+                        bgcolor=ft.colors.BLUE_200,
+                        color=ft.Colors.WHITE,
+                    )
+                ),
+                # Mais itens de menu se desejar
+            ],
         ),
     )
-    matricula_input = ft.TextField(
-        label="Matrícula",
-        width=300,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        on_change=lambda _: verificar_campos()
+
+    def toggle_menu(e):
+        # Inverte o visible e a opacidade do menu
+        menu_lateral.visible = not menu_lateral.visible
+        menu_lateral.opacity = 1.0 if menu_lateral.visible else 0.0
+        page.update()
+
+    # -------------------------------------------------------------------------
+    # BARRA SUPERIOR (com o ícone de menu/hamburger)
+    # -------------------------------------------------------------------------
+    top_bar = ft.Row(
+        controls=[
+            ft.IconButton(icon=ft.icons.MENU, on_click=toggle_menu),
+            ft.Text("Cadastro de Funcionário", size=24, weight="bold"),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,  # Centralizado horizontalmente
     )
-    entidade_input = ft.TextField(
-        label="Entidade ID",
-        width=300,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        on_change=lambda _: verificar_campos()
-    )
+
+    # -------------------------------------------------------------------------
+    # FORMULÁRIO DE CADASTRO
+    # -------------------------------------------------------------------------
+    nome_input = ft.TextField(label="Nome", width=300, on_change=lambda _: verificar_campos())
+    cpf_input = ft.TextField(label="CPF (000.000.000-00)", width=300, on_change=lambda _: (
+        setattr(cpf_input, "value", formatar_cpf(cpf_input.value)),
+        verificar_campos()
+    ))
+    matricula_input = ft.TextField(label="Matrícula", width=300, keyboard_type=ft.KeyboardType.NUMBER, on_change=lambda _: verificar_campos())
+    entidade_input = ft.TextField(label="Entidade ID", width=300, keyboard_type=ft.KeyboardType.NUMBER, on_change=lambda _: verificar_campos())
     camera_feed = ft.Image(width=300, height=300)
 
     capturar_btn = ft.ElevatedButton(
         text="Capturar Rosto",
         on_click=lambda _: Thread(target=capturar_rosto, daemon=True).start(),
         style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE, color=ft.Colors.WHITE),
+        width=120,
     )
 
     salvar_btn = ft.ElevatedButton(
-        text="Salvar Funcionário",
+        text="Salvar",
         on_click=lambda _: salvar_funcionario(),
         style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN, color=ft.Colors.WHITE),
         disabled=True,
+        width=120,
     )
 
-    voltar_btn = ft.TextButton(
-        text="Voltar",
+    cancelar_btn = ft.ElevatedButton(
+        text="Cancelar",
         on_click=lambda _: page.go("/administracao"),
-        style=ft.ButtonStyle(color=ft.Colors.BLUE),
+        style=ft.ButtonStyle(bgcolor=ft.colors.BLUE_200, color=ft.Colors.WHITE),
+        width=120,
     )
 
-    layout = ft.Column(
+    formulario = ft.Column(
         spacing=20,
-        alignment=ft.MainAxisAlignment.START,
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         controls=[
-            ft.Text("Cadastro de Funcionário (OpenCV + Hash)", size=24, weight="bold"),
+            top_bar,  # Barra superior
             nome_input,
             cpf_input,
             matricula_input,
             entidade_input,
             camera_feed,
             capturar_btn,
-            salvar_btn,
-            voltar_btn,
-        ]
+            ft.Container(expand=True),
+            ft.Row(
+                spacing=20,
+                alignment=ft.MainAxisAlignment.CENTER,
+                controls=[salvar_btn, cancelar_btn],
+            ),
+        ],
+    )
+
+    # -------------------------------------------------------------------------
+    # STACK: Coloca o "formulário" abaixo e o "menu_lateral" sobreposto
+    #       assim, quando togglamos visible/opacity, o menu aparece por cima
+    # -------------------------------------------------------------------------
+    layout_final = ft.Stack(
+        expand=True,
+        controls=[
+            formulario,                 # camadas abaixo
+            ft.Container(
+                content=menu_lateral,   # menu por cima
+                margin=ft.margin.only(left=0, top=0), # desloca para não ficar grudado
+                alignment=ft.alignment.top_left,  # fixo no canto superior esquerdo
+            ),
+        ],
     )
 
     return ft.View(
         route="/cadastrar_funcionario",
         scroll="adaptive",
-        controls=[layout],
+        controls=[layout_final],
     )
