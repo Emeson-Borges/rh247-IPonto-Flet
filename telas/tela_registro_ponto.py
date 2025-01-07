@@ -5,7 +5,6 @@ import time
 import sqlite3
 import os
 import cv2
-import json
 import numpy as np
 
 DB_PATH = "banco_de_dados.db"
@@ -23,65 +22,112 @@ def criar_tela_registro_ponto(page: ft.Page, db_path: str):
 
     def emitir_alerta(titulo, mensagem):
         """
-        Exibe um alerta sem o botão 'OK' persistente
-        e depois de fechar, volta à tela inicial.
+        Alerta simples que, ao fechar, volta à tela inicial.
         """
         def fechar_dialog(e):
             page.dialog.open = False
             page.go("/")
             page.update()
 
-        # Exibe um AlertDialog simples
         page.dialog = ft.AlertDialog(
             title=ft.Text(titulo, size=22, weight="bold"),
             content=ft.Text(mensagem, size=16),
-            # Em vez de um botão de ação, poderíamos usar "on_dismiss" - mas Flet
-            # não oferece isso diretamente. Então podemos colocar um "OK" pequeno:
             actions=[ft.TextButton("OK", on_click=fechar_dialog)],
         )
         page.dialog.open = True
         page.update()
 
-    def exibir_confirmacao(nome, matricula):
+    def exibir_confirmacao(foto_blob, nome, matricula):
         """
-        Exibe mensagem de sucesso com ícone de verificado, mostra Nome e Matrícula,
-        e depois de 3 segundos desaparece e volta para "/".
+        Diálogo de sucesso menor com layout:
+          - Ícone de check centralizado em cima
+          - Texto "REGISTRO REALIZADO"
+          - Exibe foto_blob ou imagem padrão caso foto_blob não exista
+          - Nome e Matrícula
+        Fecha sozinho após 3s e volta para "/".
         """
-        def fechar_dialog(_):
+        def fechar_dialog_automatico():
+            time.sleep(3)
             page.dialog.open = False
             page.go("/")
             page.update()
 
-        # Ícone + texto
-        check_icon = ft.Row(
-            alignment=ft.MainAxisAlignment.CENTER,
-            controls=[
-                ft.Icon(name=ft.icons.CHECK_CIRCLE_OUTLINE, color=ft.Colors.GREEN, size=50),
-                ft.Text(" Ponto Registrado!", size=22, weight="bold", color=ft.Colors.GREEN),
-            ],
+        # Determina qual imagem usar
+        if foto_blob:
+            foto_bytes = foto_blob
+        else:
+            default_path = "assets/default_image.jpg"
+            if os.path.exists(default_path):
+                with open(default_path, "rb") as f:
+                    foto_bytes = f.read()
+            else:
+                foto_bytes = b""  # Sem nada
+
+        # Converter foto em base64
+        foto_base64 = base64.b64encode(foto_bytes).decode("utf-8")
+        foto_url = f"data:image/jpeg;base64,{foto_base64}"
+
+        # Layout do diálogo
+        icone_check = ft.Icon(ft.icons.CHECK, color=ft.Colors.WHITE, size=36)
+        texto_registro = ft.Text("REGISTRO REALIZADO", size=18, weight="bold", color=ft.Colors.WHITE)
+
+        topo_verde = ft.Column(
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=5,
+            controls=[icone_check, texto_registro],
         )
 
-        # Cria o AlertDialog
+        container_topo = ft.Container(
+            bgcolor=ft.Colors.GREEN,
+            padding=10,
+            content=topo_verde,
+        )
+
+        # Foto em formato circular
+        foto_rosto = ft.CircleAvatar(
+            foreground_image_url=foto_url,
+            radius=50,
+        )
+
+        # Nome e matrícula
+        texto_nome_mat = ft.Text(
+            f"{nome}\nMatrícula: {matricula}",
+            size=14,
+            weight="bold",
+            text_align=ft.TextAlign.CENTER,
+        )
+
+        # Coluna com a foto e o texto
+        corpo = ft.Column(
+            spacing=15,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[foto_rosto, texto_nome_mat],
+        )
+
+        # Juntando topo + corpo em uma coluna principal
+        conteudo_principal = ft.Column(
+            spacing=10,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[container_topo, corpo],
+        )
+
+        # Container final
+        container_dialog = ft.Container(
+            width=250,
+            height=320,
+            content=conteudo_principal,
+        )
+
         page.dialog = ft.AlertDialog(
-            title=check_icon,
-            content=ft.Text(f"Nome: {nome}\nMatrícula: {matricula}", size=16),
-            # Não precisamos de nenhum botão, pois vai sumir sozinho
+            content=container_dialog,  # Aqui colocamos o container
         )
         page.dialog.open = True
         page.update()
 
-        # Agenda o fechamento após 3 segundos
-        def fechar_automatico():
-            time.sleep(3)
-            # Fechar e voltar ao início
-            page.dialog.open = False
-            page.go("/")
-            page.update()
+        Thread(target=fechar_dialog_automatico, daemon=True).start()
 
-        Thread(target=fechar_automatico, daemon=True).start()
-
-    def registrar_ponto(conn, funcionario_id, nome, matricula):
-        """Registra o ponto na tabela ponto_final."""
+    def registrar_ponto(conn, funcionario_id, nome, matricula, foto_blob):
+        """Registra no DB e exibe a confirmação usando a foto do BD."""
         try:
             data_ponto = time.strftime("%Y-%m-%d %H:%M:%S")
             conn.execute(
@@ -92,7 +138,7 @@ def criar_tela_registro_ponto(page: ft.Page, db_path: str):
                 (data_ponto, funcionario_id, 0),
             )
             conn.commit()
-            exibir_confirmacao(nome, matricula)
+            exibir_confirmacao(foto_blob, nome, matricula)
         except Exception as e:
             emitir_alerta("Erro", f"Erro ao registrar ponto: {e}")
 
@@ -157,10 +203,10 @@ def criar_tela_registro_ponto(page: ft.Page, db_path: str):
 
                 hash_atual = gerar_phash(rosto_capturado)
 
-                cursor.execute("SELECT funcionario_id, nome, matricula, embedding, foto_base64 FROM funcionarios")
+                cursor.execute("SELECT funcionario_id, nome, matricula, embedding, foto_blob FROM funcionarios")
                 funcionarios = cursor.fetchall()
 
-                for (func_id, nome, matricula, embedding_hex, foto_b64) in funcionarios:
+                for (func_id, nome, matricula, embedding_hex, foto_blob) in funcionarios:
                     if not embedding_hex:
                         continue
                     try:
@@ -172,7 +218,7 @@ def criar_tela_registro_ponto(page: ft.Page, db_path: str):
 
                         if melhor_diff_global is None or diff < melhor_diff_global:
                             melhor_diff_global = diff
-                            melhor_funcionario = (func_id, nome, matricula)
+                            melhor_funcionario = (func_id, nome, matricula, foto_blob)
                     except ValueError:
                         continue
 
@@ -194,15 +240,14 @@ def criar_tela_registro_ponto(page: ft.Page, db_path: str):
             if melhor_diff_global is not None and melhor_diff_global <= PHASH_THRESHOLD:
                 if not identificacao_realizada:
                     identificacao_realizada = True
-                    (func_id, nome, mat) = melhor_funcionario
-
-                    registrar_ponto(conn, func_id, nome, mat)
+                    (func_id, nome, mat, foto_blob) = melhor_funcionario
+                    registrar_ponto(conn, func_id, nome, mat, foto_blob)
                     stop_camera = True  # Para sair do loop
 
             if elapsed_time >= capture_duration and not identificacao_realizada:
                 # terminou o tempo e não identificou
                 if melhor_funcionario is not None:
-                    (f_id, f_nome, f_mat) = melhor_funcionario
+                    (f_id, f_nome, f_mat, f_foto_blob) = melhor_funcionario
                     emitir_alerta(
                         "Alerta",
                         f"Funcionário não reconhecido (diff={melhor_diff_global}). "

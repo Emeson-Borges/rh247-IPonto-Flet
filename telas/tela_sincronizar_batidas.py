@@ -3,6 +3,7 @@ import sqlite3
 import requests
 import os
 
+
 def verificar_conexao_internet():
     """Verifica se há conexão com a internet."""
     try:
@@ -11,126 +12,124 @@ def verificar_conexao_internet():
     except requests.ConnectionError:
         return False
 
+
 def criar_tela_sincronizar_batidas(page: ft.Page, db_path: str):
     if not os.path.exists(db_path):
         raise ValueError(f"Banco de dados não encontrado no caminho: {db_path}")
 
     registros = []
-    menu_aberto = False
+    selecionados = set()
+    selecionar_varios = True
 
-    # Elementos da tela
-    filtro_matricula = ft.TextField(label="Matrícula", width=200, height=40)
-    filtro_data_inicio = ft.TextField(label="Data início (YYYY-MM-DD)", width=200, height=40)
-    filtro_data_fim = ft.TextField(label="Data fim (YYYY-MM-DD)", width=200, height=40)
-    status_text = ft.Text("Nenhum registro encontrado.", size=16, color=ft.Colors.RED)
-    batidas_list = ft.ListView(expand=True, spacing=10)
+    # Contador de itens selecionados
+    contador_selecionados = ft.Text("0 itens selecionados", size=16, color=ft.Colors.BLUE)
 
-    menu_lateral = ft.Container(
-        content=ft.Column(
-            controls=[
-                ft.Text(value="Filtros", size=20, weight="bold", color=ft.Colors.BLUE_GREY),
-                filtro_matricula,
-                filtro_data_inicio,
-                filtro_data_fim,
-                ft.Row(
-                    controls=[
-                        ft.ElevatedButton(
-                            text="Aplicar Filtros",
-                            on_click=lambda e: aplicar_filtros(),
-                            style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE, color=ft.Colors.WHITE),
-                        ),
-                        ft.TextButton(
-                            text="Limpar Filtros",
-                            on_click=lambda e: limpar_filtros(),
-                            style=ft.ButtonStyle(color=ft.Colors.RED),
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                ),
-            ],
-            spacing=10,
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        width=280,
-        bgcolor="#F9F9F9",  # Cor quase branca
-        border_radius=10,
-        padding=15,
-        visible=False,
-        animate_opacity=300,
-        shadow=ft.BoxShadow(spread_radius=2, blur_radius=4, color=ft.Colors.GREY),
-    )
+    # Elementos da lista de registros
+    batidas_list = ft.ListView(expand=True, spacing=10, padding=10, auto_scroll=True)
 
     def carregar_registros():
-        """Carrega registros do banco de dados com base nos filtros."""
+        """Carrega registros do banco de dados."""
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-
-        query = "SELECT id, data_ponto, funcionario_vinculo_id FROM ponto_final WHERE sincronizado = 0"
-        filtros = []
-
-        if filtro_matricula.value.strip():
-            query += " AND funcionario_vinculo_id = ?"
-            filtros.append(filtro_matricula.value.strip())
-
-        if filtro_data_inicio.value.strip():
-            query += " AND date(data_ponto) >= ?"
-            filtros.append(filtro_data_inicio.value.strip())
-
-        if filtro_data_fim.value.strip():
-            query += " AND date(data_ponto) <= ?"
-            filtros.append(filtro_data_fim.value.strip())
-
-        cursor.execute(query, filtros)
+        cursor.execute(
+            """
+            SELECT p.id, p.data_ponto, f.nome, f.matricula
+            FROM ponto_final p
+            LEFT JOIN funcionarios f ON p.funcionario_vinculo_id = f.funcionario_id
+            WHERE p.sincronizado = 0
+            """
+        )
         resultado = cursor.fetchall()
         conn.close()
 
         registros.clear()
         batidas_list.controls.clear()
+        selecionados.clear()
 
         if resultado:
             for reg in resultado:
                 registros.append(reg)
+                registro_id, data_hora, nome, matricula = reg
+
+                # Criação da linha formatada
                 batidas_list.controls.append(
-                    ft.Checkbox(
-                        label=f"ID: {reg[0]}, Data: {reg[1]}, Funcionário ID: {reg[2]}",
-                        value=False,
-                    )
+                    ft.Row(
+                        controls=[
+                            ft.Checkbox(
+                                value=False,
+                                on_change=lambda e, reg_id=registro_id: alternar_selecao(reg_id, e.control.value),
+                            ),
+                            ft.Column(
+                                controls=[
+                                    ft.Text(f"{nome if nome else 'Funcionário Desconhecido'}", size=16, weight="bold"),
+                                    ft.Text(f"Matrícula: {matricula if matricula else 'N/A'}"),
+                                    ft.Text(f"Data e Hora: {data_hora}"),
+                                ],
+                                spacing=2,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
                 )
-            status_text.value = f"{len(resultado)} registros encontrados."
-            status_text.color = ft.Colors.GREEN
+            contador_selecionados.value = "0 itens selecionados"
         else:
-            status_text.value = "Nenhum registro encontrado."
-            status_text.color = ft.Colors.RED
+            batidas_list.controls.append(ft.Text("Nenhum registro encontrado.", size=16, color=ft.Colors.RED))
 
         page.update()
 
-    def limpar_filtros():
-        """Limpa os valores dos filtros."""
-        filtro_matricula.value = ""
-        filtro_data_inicio.value = ""
-        filtro_data_fim.value = ""
-        carregar_registros()
+    def alternar_selecao(registro_id, selecionado):
+        """Alterna a seleção de um registro."""
+        if selecionado:
+            selecionados.add(registro_id)
+        else:
+            selecionados.discard(registro_id)
+
+        contador_selecionados.value = f"{len(selecionados)} itens selecionados"
         page.update()
 
-    def aplicar_filtros():
-        """Aplica os filtros e atualiza a lista."""
-        if filtro_matricula.value.strip() or filtro_data_inicio.value.strip() or filtro_data_fim.value.strip():
-            carregar_registros()
-            toggle_menu(None)
+    def selecionar_varios_ou_desmarcar():
+        """Seleciona ou desmarca até 50 registros."""
+        nonlocal selecionar_varios
 
-    def sincronizar_batidas(e):
+        if selecionar_varios:
+            # Seleciona até 50 registros
+            for idx, reg in enumerate(registros):
+                if idx >= 50:
+                    break
+                selecionados.add(reg[0])
+
+        else:
+            # Desmarca todos
+            selecionados.clear()
+
+        # Atualiza os checkboxes e o estado do botão
+        for checkbox, reg in zip(batidas_list.controls, registros):
+            checkbox.controls[0].value = reg[0] in selecionados
+
+        selecionar_varios = not selecionar_varios
+        selecionar_btn.text = "Desmarcar" if not selecionar_varios else "Selecionar Vários"
+        contador_selecionados.value = f"{len(selecionados)} itens selecionados"
+        page.update()
+
+    def sincronizar_batidas():
         """Sincroniza as batidas selecionadas."""
         if not verificar_conexao_internet():
             emitir_alerta("Erro", "Sem conexão com a internet. Conecte-se ao Wi-Fi para sincronizar.")
             return
 
-        registros_selecionados = [
-            registros[idx] for idx, checkbox in enumerate(batidas_list.controls) if checkbox.value
-        ]
-
-        if not registros_selecionados:
+        if not selecionados:
             emitir_alerta("Aviso", "Nenhum registro selecionado para sincronizar.")
             return
+
+        # Simulação de sincronização
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        for registro_id in selecionados:
+            cursor.execute("UPDATE ponto_final SET sincronizado = 1 WHERE id = ?", (registro_id,))
+
+        conn.commit()
+        conn.close()
 
         emitir_alerta("Sucesso", "Registros sincronizados com sucesso!")
         carregar_registros()
@@ -142,76 +141,60 @@ def criar_tela_sincronizar_batidas(page: ft.Page, db_path: str):
             page.update()
 
         page.dialog = ft.AlertDialog(
-            title=ft.Text(titulo),
-            content=ft.Text(mensagem),
+            title=ft.Text(titulo, size=18, weight="bold"),
+            content=ft.Text(mensagem, size=14),
             actions=[ft.TextButton("OK", on_click=fechar_dialog)],
         )
         page.dialog.open = True
         page.update()
 
-    def toggle_menu(e):
-        """Alterna a visibilidade do menu lateral."""
-        nonlocal menu_aberto
-        menu_aberto = not menu_aberto
-        menu_lateral.visible = menu_aberto
-        page.update()
-
     carregar_registros()
 
+    selecionar_btn = ft.ElevatedButton(
+        text="Selecionar Vários",
+        on_click=lambda _: selecionar_varios_ou_desmarcar(),
+        bgcolor=ft.Colors.BLUE,
+        style=ft.ButtonStyle(
+            color=ft.Colors.WHITE  # Define a cor no estilo do botão
+        ),
+    )
+
+    sincronizar_btn = ft.ElevatedButton(
+        text="Sincronizar",
+        on_click=lambda _: sincronizar_batidas(),
+        bgcolor=ft.Colors.GREEN,
+        style=ft.ButtonStyle(
+            color=ft.Colors.WHITE  # Define a cor no estilo do botão
+        ),
+    )
+
+    voltar_btn = ft.TextButton(
+        text="Voltar",
+        on_click=lambda _: page.go("/administracao"),
+        style=ft.ButtonStyle(
+            color=ft.Colors.BLUE  # Define a cor no estilo do botão
+        ),
+    )
+
+    # Layout principal
     return ft.View(
         route="/sincronizar_batidas",
         controls=[
-            ft.Row(
+            ft.Column(
                 controls=[
-                    ft.IconButton(icon=ft.icons.FILTER_LIST, on_click=toggle_menu),
                     ft.Text("Sincronizar Batidas", size=24, weight="bold"),
+                    contador_selecionados,
+                    batidas_list,
                 ],
-                alignment=ft.MainAxisAlignment.START,
-            ),
-            ft.Stack(
-                controls=[
-                    ft.Column(
-                        controls=[
-                            ft.Row(
-                                controls=[menu_lateral],
-                                alignment=ft.MainAxisAlignment.START,
-                            ),
-                            ft.Column(
-                                controls=[
-                                    status_text,
-                                    batidas_list,
-                                ],
-                                spacing=10,
-                                expand=True,
-                            ),
-                        ],
-                        spacing=10,
-                        expand=True,
-                    ),
-                ],
+                expand=True,
             ),
             ft.Container(
                 content=ft.Row(
-                    controls=[
-                        ft.ElevatedButton(
-                            text="Sincronizar",
-                            on_click=sincronizar_batidas,
-                            style=ft.ButtonStyle(
-                                bgcolor=ft.Colors.GREEN, color=ft.Colors.WHITE
-                            ),
-                        ),
-                        ft.TextButton(
-                            text="Voltar",
-                            on_click=lambda e: page.go("/administracao"),
-                            style=ft.ButtonStyle(color=ft.Colors.BLUE),
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=20,
+                    controls=[selecionar_btn, sincronizar_btn, voltar_btn],
+                    alignment=ft.MainAxisAlignment.SPACE_AROUND,
                 ),
-                alignment=ft.alignment.bottom_center,  # Alinhado ao fundo
-                expand=True,
-                padding=20,
+                bgcolor=ft.Colors.WHITE,
+                padding=10,
             ),
         ],
     )
